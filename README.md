@@ -22,7 +22,7 @@ The ring of interest is defined in the xy-plane at the skin surface (z = 0.50 cm
 Angular conventions used in the output (distinct from MCmatlab's internal conventions):
 
 - **phi**: azimuthal angle in the xy-plane, measured from the +x axis, in the range [0°, 360°). "Towards beam" is defined as phi ∈ [0°, 180°), "away from beam" as phi ∈ [180°, 360°).
-- **theta_user**: polar angle measured from the skin surface (not from the surface normal). theta_user = 0° means light travelling parallel to the skin; theta_user = 90° means light travelling perpendicular to the skin (straight up). This relates to the standard polar angle from the surface normal theta_n by: **theta_user = 90° − theta_n**.
+- **theta_user**: polar angle measured from the skin surface (not from the surface normal). theta_user = 0° means light travelling parallel to the skin; theta_user = 90° means light travelling perpendicular to the skin (straight up). This relates to the standard polar angle from the surface normal theta_t (in air) by: **theta_user = 90° − theta_t**.
 
 ---
 
@@ -30,13 +30,13 @@ Angular conventions used in the output (distinct from MCmatlab's internal conven
 
 A naive approach would be to integrate `model.MC.NI_zneg` — the normalised irradiance on the top face of the simulation cuboid (z = 0) — over the ring area. This is incorrect because the top face is 0.5 cm above the skin surface, and the air layer between them introduces lateral displacement.
 
-A photon that exits the skin at radius r and angle theta_n from the normal travels a lateral distance
+A photon that exits the skin at radius r and angle theta_t from the normal travels a lateral distance
 
 ```
-Δr = 0.5 cm × tan(theta_n)
+Δr = 0.5 cm × tan(theta_t)
 ```
 
-before reaching z = 0. Near the critical angle (theta_n ≈ 48° for n_skin = 1.34), this displacement is Δr ≈ 0.56 cm — larger than the ring radius itself. `NI_zneg` therefore maps photons to the wrong radial positions, making it unsuitable for spatially resolved analysis.
+before reaching z = 0. At grazing angles (theta_t → 90°), this displacement diverges — even at theta_t = 70° the shift is Δr ≈ 1.4 cm, far larger than the ring radius. `NI_zneg` therefore maps photons to the wrong radial positions, making it unsuitable for spatially resolved analysis.
 
 The correct approach is to evaluate the upward flux directly at the skin surface.
 
@@ -46,13 +46,13 @@ The correct approach is to evaluate the upward flux directly at the skin surface
 
 ### 3.1 The Diffusion Approximation
 
-In a medium where scattering strongly dominates absorption (mus' >> mua), the photon fluence rate phi(r) satisfies the diffusion equation:
+In a medium where scattering strongly dominates absorption (μ_s' >> μ_a), the photon fluence rate φ(r) satisfies the diffusion equation:
 
 ```
 -D ∇²φ + μ_a φ = S
 ```
 
-where D = 1 / (3(μ_a + μ_s')) is the diffusion coefficient and S is the source term. For considered model, the relevant parameters are:
+where D = 1 / (3(μ_a + μ_s')) is the diffusion coefficient and S is the source term. For the considered model, the relevant parameters are:
 
 | Parameter | Value |
 |-----------|-------|
@@ -148,50 +148,62 @@ Each half contributes its own J_up integral, giving Pd_towards/Po and Pd_away/Po
 
 ## 6. Theta Angular Decomposition
 
-### 6.1 Angular distribution of escaping light
+### 6.1 Snell's Law and the Full Hemisphere
 
-The phi decomposition tells us how much power escapes from each half of the ring, but not at what angle. For the angular distribution we rely on the diffusion-theory result that the radiance inside a scattering medium is nearly isotropic. A Lambertian (isotropic) internal source produces an angular distribution of escaping radiance in air proportional to:
-
-```
-L_esc(θ_n) ∝ T_Fresnel(θ_n) · cos(θ_n)
-```
-
-where θ_n is the angle in air measured from the surface normal, and T_Fresnel(θ_n) is the single-pass Fresnel transmittance from skin into air at the corresponding internal angle. The cos(θ_n) factor arises from the projection of isotropic radiance onto the surface normal (Lambert's cosine law for flux).
-
-The differential power in a solid-angle element is:
+A key physical point is that the angular distribution must be expressed as angles **in air after refraction**, not as angles inside the tissue. Snell's law maps the escape cone inside skin to the full hemisphere in air:
 
 ```
-dP ∝ L_esc(θ_n) · sin(θ_n) dθ_n dφ
+n_skin · sin(θ_i) = n_air · sin(θ_t)
 ```
 
-giving the angular weight function:
+- A photon inside skin at θ_i = 0° (straight up) exits at θ_t = 0° (straight up).
+- A photon at the critical angle θ_i = θ_c ≈ 48.3° exits at θ_t = 90° (grazing).
+- Photons at θ_i > θ_c are totally internally reflected and never escape.
+
+The full escape cone inside skin (0° to 48.3°) therefore maps to the **full hemisphere in air** (0° to 90°). This means **all theta_user bins receive non-zero power** — including near-grazing angles — because Snell's law compresses the angular range inward from the skin side and expands it on the air side.
+
+### 6.2 Angular weight function in air
+
+The radiance inside a scattering medium is nearly isotropic (diffusion approximation). To obtain the angular distribution of escaping power expressed as angles in air, we must account for the Jacobian of the Snell's law transformation when changing the integration variable from θ_i (inside skin) to θ_t (in air).
+
+Differentiating Snell's law:
 
 ```
-w(θ_n) = T_Fresnel(θ_n) · cos(θ_n) · sin(θ_n)
+n_skin · cos(θ_i) dθ_i = n_air · cos(θ_t) dθ_t
+=> dθ_i/dθ_t = (n_air · cos(θ_t)) / (n_skin · cos(θ_i))
 ```
 
-This is computed numerically on a fine grid over θ_n ∈ [0°, θ_c], and normalised so that ∫ w dθ_n = 1.
-
-### 6.2 Critical angle cutoff
-
-No light escapes beyond the critical angle. In the user convention:
+Starting from the Lambertian weight inside skin, cos(θ_i) · sin(θ_i) dθ_i, and substituting:
 
 ```
-theta_user = 90° − theta_n
+w(θ_t) = T_Fresnel(θ_t) · cos(θ_i) · sin(θ_i) · (n_air · cos(θ_t)) / (n_skin · cos(θ_i))
+        = T_Fresnel(θ_t) · sin(θ_i) · (n_air / n_skin) · cos(θ_t)
 ```
 
-The critical angle theta_n = 48.3° corresponds to theta_user = 41.7°. Therefore all bins with theta_user < 41.7° have exactly zero escaped power, as confirmed in the output.
+Using Snell's law to substitute sin(θ_i) = (n_air/n_skin) · sin(θ_t):
+
+```
+w(θ_t) = T_Fresnel(θ_t) · (n_air/n_skin)² · sin(θ_t) · cos(θ_t)
+```
+
+The prefactor (n_air/n_skin)² is a constant and cancels upon normalisation, leaving the normalised weight function:
+
+```
+w(θ_t) ∝ T_Fresnel(θ_t) · sin(θ_t) · cos(θ_t)
+```
+
+where θ_t ∈ [0°, 90°]. T_Fresnel(θ_t) is close to its maximum near θ_t = 0° (normal incidence, low Fresnel reflection) and decreases toward zero as θ_t → 90°, because those photons originated near the critical angle inside skin where T_Fresnel → 0. The sin(θ_t) · cos(θ_t) factor peaks at 45°. The combined distribution therefore peaks somewhere in the mid-range and is non-zero across the full hemisphere.
 
 ### 6.3 Binning
 
-The weight function w(θ_n) is integrated over each of the 30 bins (3° wide in theta_user, i.e. 3° wide in theta_n) to give the fractional power w_bin(k) in bin k. The total Pd/Po for each phi half is then distributed across bins:
+The weight function w(θ_t) is integrated numerically over each of the 30 bins (3° wide in theta_user, equivalently 3° wide in θ_t) to give the fractional power w_bin(k) in bin k. The total Pd/Po for each phi half is then distributed across bins:
 
 ```
 Pd_Po_table(k, towards) = Pd_towards/Po × w_bin(k)
-Pd_away_Po_table(k, away)   = Pd_away/Po    × w_bin(k)
+Pd_Po_table(k, away)    = Pd_away/Po    × w_bin(k)
 ```
 
-This assumes the same angular shape for both phi halves, which is justified because the Fresnel-modified Lambertian emission pattern is azimuthally symmetric.
+This assumes the same angular shape for both phi halves, which is justified because the Fresnel-modified emission pattern is azimuthally symmetric.
 
 ---
 
@@ -199,7 +211,7 @@ This assumes the same angular shape for both phi halves, which is justified beca
 
 **Diffusion approximation**: Valid when μ_s' >> μ_a and the point of interest is many scattering mean free paths from any source or boundary. At 2940 nm in skin these conditions are met at r = 0.2 cm, but would fail close to the beam axis or at much longer wavelengths where absorption dominates.
 
-**Isotropic radiance (Lambertian emission)**: The diffusion approximation implies isotropic radiance inside the medium. In reality, close to a specular source the radiance retains some forward bias (described by higher-order P3 or adding-doubling transport theory). For the geometry here (r = 0.2 cm, approximately 10 MFPs from the beam), the bias is small.
+**Isotropic radiance (Lambertian emission)**: The diffusion approximation implies isotropic radiance inside the medium. In reality, close to a source the radiance retains some forward bias (described by higher-order P3 or adding-doubling transport theory). For the geometry here (r = 0.2 cm, approximately 10 MFPs from the beam), the bias is small.
 
 **Single-pass Fresnel factor**: The script applies T_avg as a single Fresnel transmission correction. Multiple internal reflections (photons that are reflected at the surface, scatter back, and make another attempt) are not explicitly accounted for, but their contribution is already partially captured in the NFR distribution computed by the Monte Carlo simulation.
 
@@ -213,10 +225,11 @@ This assumes the same angular shape for both phi halves, which is justified beca
 
 The output table shows that:
 
-- Bins theta_user = 0°–42° contain zero power, as expected from the critical angle cutoff.
-- The peak of the distribution is near theta_user ≈ 42°–48° (just above the critical angle threshold), where the Fresnel transmittance rises steeply from zero.
-- Power decreases smoothly towards theta_user = 90° (normal direction) because the Lambertian cos(θ_n) weighting reduces the flux contribution at near-normal emission angles despite full Fresnel transmission there.
-- The slight asymmetry between "towards" and "away" phi halves (ratio ≈ 1.14) reflects the asymmetry in the fluence rate distribution at the skin surface due to the directional nature of subsurface scattering relative to the ring position.
+- All theta_user bins from 0° to 90° receive non-zero power. This is a direct consequence of Snell's law: the narrow escape cone inside skin (0° to 48.3° from normal) is refractively expanded to cover the full hemisphere in air.
+- The distribution peaks in the mid-range of theta_user (roughly 45°–60°), reflecting the combined effect of the Snell's law Jacobian stretching and the Fresnel transmittance dropping toward zero at grazing angles.
+- Near-grazing bins (theta_user close to 0°) are non-zero but small, because photons exiting at those angles originated near the critical angle inside skin where the Fresnel transmittance approaches zero.
+- Near-normal bins (theta_user close to 90°) are also relatively small, due to the sin(θ_t) · cos(θ_t) solid-angle weighting being small there.
+- The slight asymmetry between "towards" and "away" phi halves reflects the asymmetry in the fluence rate distribution at the skin surface due to the directional nature of subsurface scattering relative to the ring position.
 
 ---
 

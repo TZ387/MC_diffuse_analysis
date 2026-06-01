@@ -106,8 +106,8 @@ fprintf('Using voxels iz1=%d (z=%.4f cm) and iz2=%d (z=%.4f cm) for flux\n', ...
 
 %% ---- EXTRACT NFR SLICES AT SKIN SURFACE --------------------------------
 % NFR is [nx, ny, nz], units [W/cm^2 / W_incident]
-NFR1 = double(model.MC.NFR(:,:,iz1));   % [nx, ny] first skin voxel
-NFR2 = double(model.MC.NFR(:,:,iz2));   % [nx, ny] second skin voxel
+NFR1 = double(model.MC.normalizedFluenceRate(:,:,iz1));   % [nx, ny] first skin voxel
+NFR2 = double(model.MC.normalizedFluenceRate(:,:,iz2));   % [nx, ny] second skin voxel
 
 % Upward partial flux at the interface [W/cm^2 / W_incident]
 % J_up = NFR/4 - (D/2) * dNFR/dz
@@ -182,51 +182,88 @@ fprintf('\nPd/Po towards beam (phi 0-180 deg):    %.6f\n', Pd_Po_towards_total);
 fprintf('Pd/Po away from beam (phi 180-360 deg): %.6f\n', Pd_Po_away_total);
 
 %% ---- ANGULAR WEIGHT FUNCTION -------------------------------------------
-% Angular distribution of escaping light (in air, from surface normal)
-% is proportional to T_Fresnel(theta_n) * cos(theta_n) * sin(theta_n)
-% where theta_n is the angle in air from the surface normal.
+% We want the angular distribution of escaping light expressed as angles
+% in AIR (theta_t), not inside the skin.
 %
-% User convention: theta_user = 90 - theta_n_deg
-%   theta_user = 0  -> grazing (parallel to skin)
-%   theta_user = 90 -> normal  (perpendicular to skin)
+% Snell's law: n_skin * sin(theta_i) = n_air * sin(theta_t)
 %
-% Note: nothing escapes for theta_n > theta_c (total internal reflection),
-% which maps to theta_user < (90 - theta_c_deg).
+% Key point: the full escape cone inside skin (theta_i = 0 to theta_c)
+% maps to the FULL hemisphere in air (theta_t = 0 to 90 deg).
+% A photon at the critical angle inside skin (theta_i = theta_c) exits
+% at theta_t = 90 deg (grazing). A photon going straight up (theta_i = 0)
+% exits straight up (theta_t = 0). Snell's law EXPANDS the angular range,
+% so ALL bins in air have non-zero weight.
+%
+% The weight function in air must account for the Jacobian of the
+% Snell's law angle transformation. Starting from the Lambertian source
+% inside skin (isotropic radiance -> flux weight cos(theta_i)*sin(theta_i)):
+%
+%   w(theta_i) d(theta_i) -> w(theta_t) d(theta_t)
+%
+% Differentiating Snell's law:
+%   n_skin * cos(theta_i) d(theta_i) = n_air * cos(theta_t) d(theta_t)
+%   => d(theta_i)/d(theta_t) = (n_air * cos(theta_t)) / (n_skin * cos(theta_i))
+%
+% So the weight per unit theta_t in air is:
+%
+%   w(theta_t) = T_Fresnel(theta_t) * cos(theta_i) * sin(theta_i)
+%                * (n_air * cos(theta_t)) / (n_skin * cos(theta_i))
+%              = T_Fresnel(theta_t) * sin(theta_i) * (n_air/n_skin) * cos(theta_t)
+%
+% Using Snell: sin(theta_i) = (n_air/n_skin) * sin(theta_t), so:
+%
+%   w(theta_t) = T_Fresnel(theta_t) * (n_air/n_skin)^2 * sin(theta_t) * cos(theta_t)
+%
+% The (n_air/n_skin)^2 factor is a constant and cancels in normalisation.
+% So the normalised weight is:
+%
+%   w(theta_t) proportional to T_Fresnel(theta_t) * sin(theta_t) * cos(theta_t)
+%
+% where theta_t runs from 0 to 90 deg (full hemisphere in air).
+% This is the same functional form as before but now correctly covering
+% the full hemisphere, with T_Fresnel evaluated at each theta_t.
 
 theta_c_deg = theta_c * 180/pi;
-fprintf('\nCritical angle from normal: %.2f deg\n', theta_c_deg);
-fprintf('=> Light only escapes for theta_user > %.2f deg (from surface)\n', 90 - theta_c_deg);
+fprintf('\nCritical angle inside skin: %.2f deg from normal\n', theta_c_deg);
+fprintf('=> Via Snell''s law this maps to the full hemisphere in air (0-90 deg)\n');
+fprintf('=> ALL theta_user bins have non-zero weight\n');
 
-% Angular grid in air (from normal)
-theta_n_fine = linspace(0, theta_c - 1e-9, N_fine);
-theta_i_fine2 = asin((n_air/n_skin) * sin(theta_n_fine));  % angle in skin
-cos_tn = cos(theta_n_fine);
+% Angular grid in AIR (theta_t = angle from normal in air), full hemisphere
+theta_t_fine = linspace(0, pi/2 - 1e-9, N_fine);   % [rad]
+
+% Corresponding angle inside skin via Snell's law
+theta_i_fine2 = asin((n_air/n_skin) * sin(theta_t_fine));  % always <= theta_c
+
+cos_tt2 = cos(theta_t_fine);
 cos_ti2 = cos(theta_i_fine2);
-Rs2 = ((n_skin*cos_ti2 - n_air*cos_tn) ./ (n_skin*cos_ti2 + n_air*cos_tn)).^2;
-Rp2 = ((n_air*cos_ti2  - n_skin*cos_tn) ./ (n_air*cos_ti2  + n_skin*cos_tn)).^2;
-T_fresnel_air = 1 - 0.5*(Rs2 + Rp2);
 
-weight_fine = T_fresnel_air .* cos_tn .* sin(theta_n_fine);
-W_total_norm = trapz(theta_n_fine, weight_fine);
+% Fresnel transmittance, computed at the inside-skin angle theta_i
+% (equivalent to evaluating at theta_t via Snell's law)
+Rs2 = ((n_skin*cos_ti2 - n_air*cos_tt2) ./ (n_skin*cos_ti2 + n_air*cos_tt2)).^2;
+Rp2 = ((n_air*cos_ti2  - n_skin*cos_tt2) ./ (n_air*cos_ti2  + n_skin*cos_tt2)).^2;
+T_fresnel_t = 1 - 0.5*(Rs2 + Rp2);
 
-% Bin edges in user convention (theta_user: 0 to 90, step 3 deg)
-theta_user_edges = (0:N_theta) * (90/N_theta);      % [deg]
-theta_n_edges    = 90 - theta_user_edges;            % corresponding normal angles [deg]
-% Bin k covers theta_user in [theta_user_edges(k), theta_user_edges(k+1)]
-%             = theta_n    in [theta_n_edges(k+1),  theta_n_edges(k)    ]
+% Weight in air: T_Fresnel * sin(theta_t) * cos(theta_t)
+% (n_air/n_skin)^2 factor omitted as it cancels in normalisation
+weight_fine = T_fresnel_t .* sin(theta_t_fine) .* cos_tt2;
+W_total_norm = trapz(theta_t_fine, weight_fine);
+
+% Bin edges in user convention (theta_user = 90 - theta_t_deg)
+%   theta_user = 0  -> grazing (theta_t = 90 deg)
+%   theta_user = 90 -> normal  (theta_t = 0 deg)
+% Bin k: theta_user in [theta_user_edges(k), theta_user_edges(k+1)]
+%      = theta_t    in [90-theta_user_edges(k+1), 90-theta_user_edges(k)] deg
+
+theta_user_edges = (0:N_theta) * (90/N_theta);   % [deg]
 
 w_bin = zeros(1, N_theta);
 for k = 1:N_theta
-    tn_lo = theta_n_edges(k+1) * pi/180;
-    tn_hi = theta_n_edges(k)   * pi/180;
-    if tn_lo >= theta_c
-        w_bin(k) = 0;
-    else
-        tn_hi_eff = min(tn_hi, theta_c - 1e-9);
-        idx = (theta_n_fine >= tn_lo) & (theta_n_fine <= tn_hi_eff);
-        if any(idx)
-            w_bin(k) = trapz(theta_n_fine(idx), weight_fine(idx)) / W_total_norm;
-        end
+    % theta_t range for this bin (in radians)
+    tt_lo = (90 - theta_user_edges(k+1)) * pi/180;   % lower theta_t
+    tt_hi = (90 - theta_user_edges(k))   * pi/180;   % upper theta_t
+    idx = (theta_t_fine >= tt_lo) & (theta_t_fine <= tt_hi);
+    if any(idx)
+        w_bin(k) = trapz(theta_t_fine(idx), weight_fine(idx)) / W_total_norm;
     end
 end
 
@@ -245,7 +282,7 @@ fprintf('\n');
 fprintf('==========================================================================\n');
 fprintf(' Pd/Po breakdown by theta and phi\n');
 fprintf(' Ring: r = %.2f to %.2f cm,  phi split at %.0f deg\n', r_inner, r_outer, PHI_SPLIT_DEG);
-fprintf(' Flux estimated from NFR at skin surface via diffusion approximation\n');
+fprintf(' Flux from NFR at skin surface; angles in air after Snell''s law refraction\n');
 fprintf('==========================================================================\n');
 fprintf(' theta_user [deg]  |  Towards beam  |  Away from beam  |  Total bin\n');
 fprintf('--------------------------------------------------------------------------\n');
