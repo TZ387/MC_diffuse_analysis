@@ -344,7 +344,7 @@ fprintf('\n');
 fprintf('==========================================================================\n');
 fprintf(' Pd/Po breakdown by theta and phi\n');
 fprintf(' Ring: r = %.2f to %.2f cm,  phi split at %.0f deg\n', r_inner, r_outer, PHI_SPLIT_DEG);
-fprintf(' Flux from NFR at skin surface; angles in air after Snell's law refraction\n');
+fprintf(' Flux from NFR at skin surface; angles in air after Snell''s law refraction\n');
 fprintf('==========================================================================\n');
 fprintf(' theta_user [deg]  |  Towards beam  |  Away from beam  |  Total bin\n');
 fprintf('--------------------------------------------------------------------------\n');
@@ -367,7 +367,7 @@ fprintf('=======================================================================
 % writecell([header; num2cell(data)], 'ring_diffuse_results.csv');
 
 %% ---- PLOT --------------------------------------------------------------
-figure('Name','Ring diffuse power analysis','Color','w','Position',[100 100 1500 420]);
+figure('Name','Ring diffuse power analysis','Color','w','Position',[100 100 1000 420]);
 
 theta_centres = theta_user_edges(1:end-1) + 0.5*(90/N_theta);
 
@@ -377,7 +377,7 @@ theta_centres = theta_user_edges(1:end-1) + 0.5*(90/N_theta);
 % to the internal theta_user variable (where 90 = normal).
 xlabel_str = '\theta  [deg]   (0° = normal,  90° = parallel to skin)';
 
-subplot(1,3,1);
+subplot(1,2,1);
 bar(theta_centres, Pd_Po_table, 'stacked');
 legend('Towards beam (\phi = 0-180°)', 'Away from beam (\phi = 180-360°)', ...
     'Location','northeast');
@@ -388,22 +388,12 @@ set(gca, 'XDir', 'reverse');
 xlim([0 90]);
 grid on;
 
-subplot(1,3,2);
-bar(theta_centres, w_bin);
-xlabel(xlabel_str);
-ylabel('Fraction of total escaped power');
-title(sprintf('Angular weight function\n(Fresnel + Snell, n_{skin}=%.2f)', n_skin));
-set(gca, 'XDir', 'reverse');
-xlim([0 90]);
-grid on;
-
-subplot(1,3,3);
+subplot(1,2,2);
 % Pd/(Po*dOmega): solid-angle-normalised radiant intensity [sr^-1]
 % Shows power escaping per steradian per unit incident power.
 % Peaks near theta = 0 (normal direction), consistent with Lambertian
-% emission which goes as cos(theta_t) where theta_t = 90 - theta_user.
-% The total curve uses dOmega_full (2*pi strip); the phi-split curves use
-% dOmega_half (pi strip), so all three share the same y-axis units.
+% emission which goes as cos(theta_t).
+% The phi-split curves use dOmega_half (pi strip per bin).
 bar(theta_centres, [Pd_Po_dOmega_towards; Pd_Po_dOmega_away]', 'stacked');
 legend('Towards beam (\phi = 0-180°)', 'Away from beam (\phi = 180-360°)', ...
     'Location','northeast');
