@@ -22,7 +22,7 @@ The ring of interest is defined in the xy-plane at the skin surface (z = 0.50 cm
 Angular conventions used in the output (distinct from MCmatlab's internal conventions):
 
 - **phi**: azimuthal angle in the xy-plane, measured from the +x axis, in the range [0°, 360°). "Towards beam" is defined as phi ∈ [0°, 180°), "away from beam" as phi ∈ [180°, 360°).
-- **theta_user**: polar angle measured from the skin surface (not from the surface normal). theta_user = 0° means light travelling parallel to the skin; theta_user = 90° means light travelling perpendicular to the skin (straight up). This relates to the standard polar angle from the surface normal theta_t (in air) by: **theta_user = 90° − theta_t**.
+- **θ**: polar angle measured from the surface normal, following the convention of the reference figure. θ = 0° means light travelling perpendicular to the skin (straight up, normal direction); θ = 90° means light travelling parallel to the skin (grazing). This is identical to the standard polar angle from the surface normal θ_t in air. In the plots the x-axis runs from 0° (left) to 90° (right), matching the reference figure.
 
 ---
 
@@ -160,7 +160,7 @@ n_skin · sin(θ_i) = n_air · sin(θ_t)
 - A photon at the critical angle θ_i = θ_c ≈ 48.3° exits at θ_t = 90° (grazing).
 - Photons at θ_i > θ_c are totally internally reflected and never escape.
 
-The full escape cone inside skin (0° to 48.3°) therefore maps to the **full hemisphere in air** (0° to 90°). This means **all theta_user bins receive non-zero power** — including near-grazing angles — because Snell's law compresses the angular range inward from the skin side and expands it on the air side.
+The full escape cone inside skin (0° to 48.3°) therefore maps to the **full hemisphere in air** (0° to 90°). This means **all angular bins receive non-zero power** — including near-grazing angles — because Snell's law compresses the angular range inward from the skin side and expands it on the air side.
 
 ### 6.2 Angular weight function in air
 
@@ -194,9 +194,38 @@ w(θ_t) ∝ T_Fresnel(θ_t) · sin(θ_t) · cos(θ_t)
 
 where θ_t ∈ [0°, 90°]. T_Fresnel(θ_t) is close to its maximum near θ_t = 0° (normal incidence, low Fresnel reflection) and decreases toward zero as θ_t → 90°, because those photons originated near the critical angle inside skin where T_Fresnel → 0. The sin(θ_t) · cos(θ_t) factor peaks at 45°. The combined distribution therefore peaks somewhere in the mid-range and is non-zero across the full hemisphere.
 
-### 6.3 Binning
+### 6.3 Two weight functions
 
-The weight function w(θ_t) is integrated numerically over each of the 30 bins (3° wide in theta_user, equivalently 3° wide in θ_t) to give the fractional power w_bin(k) in bin k. The total Pd/Po for each phi half is then distributed across bins:
+Two distinct weight functions are used in the script:
+
+**(A) Power weight** — used to compute the fraction of total escaped power in each angular bin. This integrates radiance over solid angle and therefore includes the sin(θ_t) solid-angle factor:
+
+```
+w_power(θ_t) ∝ T_Fresnel(θ_t) · sin(θ_t) · cos(θ_t)
+```
+
+**(B) Intensity weight** — used for the Pd/(Po·dΩ) plot. This represents radiant intensity (power per steradian) and does **not** include sin(θ_t), because the solid angle dΩ already accounts for it:
+
+```
+w_intensity(θ_t) ∝ T_Fresnel(θ_t) · cos(θ_t)
+```
+
+This peaks at θ_t = 0° (normal direction) and falls to zero at θ_t = 90° (grazing), consistent with a Lambertian source and with the reference figure.
+
+### 6.4 Solid angle per bin
+
+The solid angle of each annular bin is computed exactly as:
+
+```
+dΩ_full = 2π · [cos(θ_t_lo) − cos(θ_t_hi)]       (full 2π azimuthal strip)
+dΩ_half =  π · [cos(θ_t_lo) − cos(θ_t_hi)]       (one phi bracket, π wide)
+```
+
+where θ_t_lo and θ_t_hi are the lower and upper boundaries of the bin in terms of θ_t. The **exact** cosine-difference form is used rather than the differential approximation 2π·sin(θ_t)·Δθ_t, which would introduce error for finite bin widths. Since each phi bracket spans exactly half the azimuth (π radians instead of 2π), the towards and away halves each use dΩ_half, while the combined total uses dΩ_full.
+
+### 6.5 Binning
+
+The power weight w_power(θ_t) is integrated numerically over each of the 30 bins (3° wide) to give the fractional power w_bin(k). The total Pd/Po for each phi half is then distributed across bins:
 
 ```
 Pd_Po_table(k, towards) = Pd_towards/Po × w_bin(k)
@@ -223,12 +252,12 @@ This assumes the same angular shape for both phi halves, which is justified beca
 
 ## 8. Key Result Interpretation
 
-The output table shows that:
+The output table and plots show that:
 
-- All theta_user bins from 0° to 90° receive non-zero power. This is a direct consequence of Snell's law: the narrow escape cone inside skin (0° to 48.3° from normal) is refractively expanded to cover the full hemisphere in air.
-- The distribution peaks in the mid-range of theta_user (roughly 45°–60°), reflecting the combined effect of the Snell's law Jacobian stretching and the Fresnel transmittance dropping toward zero at grazing angles.
-- Near-grazing bins (theta_user close to 0°) are non-zero but small, because photons exiting at those angles originated near the critical angle inside skin where the Fresnel transmittance approaches zero.
-- Near-normal bins (theta_user close to 90°) are also relatively small, due to the sin(θ_t) · cos(θ_t) solid-angle weighting being small there.
+- All angular bins from θ = 0° to 90° receive non-zero power. This is a direct consequence of Snell's law: the narrow escape cone inside skin (0° to 48.3° from normal) is refractively expanded to cover the full hemisphere in air.
+- The Pd/Po per bin plot peaks in the mid-range (roughly θ = 30°–50°), reflecting the combined effect of the sin(θ_t)·cos(θ_t) solid-angle weighting and the Fresnel transmittance dropping toward zero at grazing angles.
+- The Pd/(Po·dΩ) plot (radiant intensity) peaks near θ = 0° (normal direction) and decreases monotonically toward grazing, consistent with the Lambertian cos(θ_t) dependence shown in the reference figure. The difference between the two plots is purely geometric: bins near grazing (θ ≈ 90°) have large solid angles, making their Pd/Po contribution relatively large even though their radiant intensity is small.
+- Near-grazing bins (θ close to 90°) have non-zero but small radiant intensity, because photons exiting at those angles originated near the critical angle inside skin where the Fresnel transmittance approaches zero.
 - The slight asymmetry between "towards" and "away" phi halves reflects the asymmetry in the fluence rate distribution at the skin surface due to the directional nature of subsurface scattering relative to the ring position.
 
 ---

@@ -243,10 +243,32 @@ Rs2 = ((n_skin*cos_ti2 - n_air*cos_tt2) ./ (n_skin*cos_ti2 + n_air*cos_tt2)).^2;
 Rp2 = ((n_air*cos_ti2  - n_skin*cos_tt2) ./ (n_air*cos_ti2  + n_skin*cos_tt2)).^2;
 T_fresnel_t = 1 - 0.5*(Rs2 + Rp2);
 
-% Weight in air: T_Fresnel * sin(theta_t) * cos(theta_t)
-% (n_air/n_skin)^2 factor omitted as it cancels in normalisation
-weight_fine = T_fresnel_t .* sin(theta_t_fine) .* cos_tt2;
-W_total_norm = trapz(theta_t_fine, weight_fine);
+% Two weight functions are needed:
+%
+% (A) POWER weight: used to compute what fraction of total escaped power
+%     falls in each bin. This integrates radiance over solid angle, so it
+%     includes the sin(theta_t) solid-angle factor:
+%
+%       w_power(theta_t) = T_Fresnel * cos(theta_t) * sin(theta_t)
+%
+%     Integrating over theta_t gives power per unit phi. The (n_air/n_skin)^2
+%     Snell Jacobian factor cancels in normalisation and is omitted.
+%
+% (B) INTENSITY weight: used for Pd/(Po*dOmega), i.e. radiant intensity
+%     per unit incident power. This is the radiance-like quantity and does
+%     NOT include sin(theta_t), because dOmega already accounts for it:
+%
+%       w_intensity(theta_t) = T_Fresnel * cos(theta_t)
+%
+%     This peaks at theta_t = 0 (normal direction, theta_user = 90 deg)
+%     and falls to zero at theta_t = 90 deg (grazing, theta_user = 0 deg),
+%     consistent with a Lambertian source as seen in the reference figure.
+
+weight_power     = T_fresnel_t .* sin(theta_t_fine) .* cos_tt2;  % for Pd/Po per bin
+weight_intensity = T_fresnel_t .* cos_tt2;                        % for Pd/(Po*dOmega)
+
+W_power_norm     = trapz(theta_t_fine, weight_power);
+W_intensity_norm = trapz(theta_t_fine, weight_intensity);
 
 % Bin edges in user convention (theta_user = 90 - theta_t_deg)
 %   theta_user = 0  -> grazing (theta_t = 90 deg)
@@ -256,18 +278,51 @@ W_total_norm = trapz(theta_t_fine, weight_fine);
 
 theta_user_edges = (0:N_theta) * (90/N_theta);   % [deg]
 
-w_bin = zeros(1, N_theta);
+w_bin_power     = zeros(1, N_theta);   % fractional power per bin
+w_bin_intensity = zeros(1, N_theta);   % unnormalised intensity shape per bin
 for k = 1:N_theta
-    % theta_t range for this bin (in radians)
-    tt_lo = (90 - theta_user_edges(k+1)) * pi/180;   % lower theta_t
-    tt_hi = (90 - theta_user_edges(k))   * pi/180;   % upper theta_t
+    tt_lo = (90 - theta_user_edges(k+1)) * pi/180;
+    tt_hi = (90 - theta_user_edges(k))   * pi/180;
     idx = (theta_t_fine >= tt_lo) & (theta_t_fine <= tt_hi);
     if any(idx)
-        w_bin(k) = trapz(theta_t_fine(idx), weight_fine(idx)) / W_total_norm;
+        w_bin_power(k)     = trapz(theta_t_fine(idx), weight_power(idx))     / W_power_norm;
+        w_bin_intensity(k) = trapz(theta_t_fine(idx), weight_intensity(idx)) / W_intensity_norm;
     end
 end
 
-fprintf('Sum of angular bin weights: %.6f (should be 1.0)\n', sum(w_bin));
+% For backward compatibility keep w_bin as the power weight
+w_bin = w_bin_power;
+
+fprintf('Sum of angular bin weights (power):     %.6f (should be 1.0)\n', sum(w_bin_power));
+fprintf('Sum of angular bin weights (intensity): %.6f\n', sum(w_bin_intensity));
+
+%% ---- SOLID ANGLE PER BIN -----------------------------------------------
+% Each theta_user bin covers a full annular strip of the hemisphere.
+% In terms of theta_t (angle from normal in air, theta_t = 90 - theta_user):
+%
+%   dOmega = 2*pi * integral_{theta_t_lo}^{theta_t_hi} sin(theta_t) d(theta_t)
+%           = 2*pi * [cos(theta_t_lo) - cos(theta_t_hi)]
+%
+% This is the EXACT expression for the solid angle of an annular strip.
+% It is NOT simply 2*pi*sin(theta_t)*delta_theta, which is only the
+% differential approximation valid for infinitesimally narrow bins.
+%
+% The bins are defined in theta_user (= 90 - theta_t), so equal steps
+% in theta_user correspond to equal steps in theta_t. For bin k:
+%   theta_t in [90-theta_user_edges(k+1), 90-theta_user_edges(k)]
+%           = [tt_lo, tt_hi]  with tt_lo < tt_hi
+%
+% For a phi-split half (towards or away, each spanning pi in phi),
+% the solid angle is exactly half: dOmega_half = pi*[cos(tt_lo)-cos(tt_hi)].
+
+dOmega_full = zeros(1, N_theta);   % [sr] full 2*pi annular strip (both phi halves)
+dOmega_half = zeros(1, N_theta);   % [sr] half strip (one phi bracket, pi wide)
+for k = 1:N_theta
+    tt_lo = (90 - theta_user_edges(k+1)) * pi/180;   % lower theta_t [rad]
+    tt_hi = (90 - theta_user_edges(k))   * pi/180;   % upper theta_t [rad]
+    dOmega_full(k) = 2*pi * (cos(tt_lo) - cos(tt_hi));
+    dOmega_half(k) =   pi * (cos(tt_lo) - cos(tt_hi));
+end
 
 %% ---- BUILD OUTPUT TABLE ------------------------------------------------
 % Distribute the total escaping power into angular and phi bins
@@ -277,12 +332,19 @@ for k = 1:N_theta
     Pd_Po_table(k, 2) = Pd_Po_away_total    * w_bin(k);
 end
 
+% Solid-angle-normalised radiant intensity: Pd / (Po * dOmega)  [sr^-1]
+% Each phi half spans pi sr per annular strip -> use dOmega_half
+% The total (both halves) spans 2*pi sr per annular strip -> use dOmega_full
+Pd_Po_dOmega_towards = Pd_Po_table(:,1)' ./ dOmega_half;    % [sr^-1]
+Pd_Po_dOmega_away    = Pd_Po_table(:,2)' ./ dOmega_half;    % [sr^-1]
+Pd_Po_dOmega_total   = sum(Pd_Po_table,2)' ./ dOmega_full;  % [sr^-1]
+
 %% ---- DISPLAY RESULTS ---------------------------------------------------
 fprintf('\n');
 fprintf('==========================================================================\n');
 fprintf(' Pd/Po breakdown by theta and phi\n');
 fprintf(' Ring: r = %.2f to %.2f cm,  phi split at %.0f deg\n', r_inner, r_outer, PHI_SPLIT_DEG);
-fprintf(' Flux from NFR at skin surface; angles in air after Snell''s law refraction\n');
+fprintf(' Flux from NFR at skin surface; angles in air after Snell's law refraction\n');
 fprintf('==========================================================================\n');
 fprintf(' theta_user [deg]  |  Towards beam  |  Away from beam  |  Total bin\n');
 fprintf('--------------------------------------------------------------------------\n');
@@ -305,22 +367,49 @@ fprintf('=======================================================================
 % writecell([header; num2cell(data)], 'ring_diffuse_results.csv');
 
 %% ---- PLOT --------------------------------------------------------------
-figure('Name','Ring diffuse power analysis','Color','w','Position',[100 100 1000 420]);
+figure('Name','Ring diffuse power analysis','Color','w','Position',[100 100 1500 420]);
 
 theta_centres = theta_user_edges(1:end-1) + 0.5*(90/N_theta);
 
-subplot(1,2,1);
+% Note on x-axis convention: following the reference figure convention,
+% theta = 0 deg is normal to skin (perpendicular) and theta = 90 deg is
+% parallel to skin (grazing). The x-axis is therefore reversed relative
+% to the internal theta_user variable (where 90 = normal).
+xlabel_str = '\theta  [deg]   (0° = normal,  90° = parallel to skin)';
+
+subplot(1,3,1);
 bar(theta_centres, Pd_Po_table, 'stacked');
 legend('Towards beam (\phi = 0-180°)', 'Away from beam (\phi = 180-360°)', ...
-    'Location','northwest');
-xlabel('\theta_{user}  [deg]   (0° = parallel,  90° = normal to skin)');
+    'Location','northeast');
+xlabel(xlabel_str);
 ylabel('Pd/Po per bin');
-title(sprintf('Ring r = %.2f–%.2f cm: angular Pd/Po breakdown', r_inner, r_outer));
+title(sprintf('Ring r = %.2f–%.2f cm: Pd/Po per bin', r_inner, r_outer));
+set(gca, 'XDir', 'reverse');
+xlim([0 90]);
 grid on;
 
-subplot(1,2,2);
+subplot(1,3,2);
 bar(theta_centres, w_bin);
-xlabel('\theta_{user}  [deg]');
+xlabel(xlabel_str);
 ylabel('Fraction of total escaped power');
-title(sprintf('Angular weight function\n(Fresnel-modified Lambertian, n_{skin}=%.2f)', n_skin));
+title(sprintf('Angular weight function\n(Fresnel + Snell, n_{skin}=%.2f)', n_skin));
+set(gca, 'XDir', 'reverse');
+xlim([0 90]);
+grid on;
+
+subplot(1,3,3);
+% Pd/(Po*dOmega): solid-angle-normalised radiant intensity [sr^-1]
+% Shows power escaping per steradian per unit incident power.
+% Peaks near theta = 0 (normal direction), consistent with Lambertian
+% emission which goes as cos(theta_t) where theta_t = 90 - theta_user.
+% The total curve uses dOmega_full (2*pi strip); the phi-split curves use
+% dOmega_half (pi strip), so all three share the same y-axis units.
+bar(theta_centres, [Pd_Po_dOmega_towards; Pd_Po_dOmega_away]', 'stacked');
+legend('Towards beam (\phi = 0-180°)', 'Away from beam (\phi = 180-360°)', ...
+    'Location','northeast');
+xlabel(xlabel_str);
+ylabel('Pd / (Po \cdot d\Omega)  [sr^{-1}]');
+title(sprintf('Solid-angle-normalised radiant intensity\nd\\Omega = \\pi[cos(\\theta_{t,lo})-cos(\\theta_{t,hi})]  per half'));
+set(gca, 'XDir', 'reverse');
+xlim([0 90]);
 grid on;
