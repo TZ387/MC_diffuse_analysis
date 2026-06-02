@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the method used in `ring_diffuse_power_analysis.m` to compute the fraction of incident beam power **Pd/Po** that diffusely escapes upward into air through an annular ring on the skin surface, along with its decomposition into azimuthal (phi) and polar (theta) angular bins.
+This document describes the method used in `ring_diffuse_power_analysis.m` to compute the fraction of incident beam power **Pd/Po** that diffusely escapes upward into air through an annular ring on the skin surface, along with its decomposition into polar angle (theta) bins.
 
 The simulation is performed with MCmatlab, a Monte Carlo light transport code. The analysis script post-processes the simulation output without requiring any re-simulation.
 
@@ -19,10 +19,11 @@ The MCmatlab simulation cuboid has:
 
 The ring of interest is defined in the xy-plane at the skin surface (z = 0.50 cm), with inner radius r = 0.19 cm and outer radius r = 0.21 cm, centred on the beam axis.
 
-Angular conventions used in the output (distinct from MCmatlab's internal conventions):
+Angular convention used in the output:
 
-- **phi**: azimuthal angle in the xy-plane, measured from the +x axis, in the range [0°, 360°). "Towards beam" is defined as phi ∈ [0°, 180°), "away from beam" as phi ∈ [180°, 360°).
-- **θ**: polar angle measured from the surface normal, following the convention of the reference figure. θ = 0° means light travelling perpendicular to the skin (straight up, normal direction); θ = 90° means light travelling parallel to the skin (grazing). This is identical to the standard polar angle from the surface normal θ_t in air. In the plots the x-axis runs from 0° (left) to 90° (right), matching the reference figure.
+- **θ**: polar angle from the surface normal. θ = 0° means light travelling perpendicular to the skin (straight up, normal direction); θ = 90° means light travelling parallel to the skin (grazing). This is identical to the standard refracted angle θ_t in air after Snell's law.
+
+No azimuthal (phi) decomposition is performed. The geometry is rotationally symmetric about the beam axis (on-axis beam, flat homogeneous layers), so the azimuthal distribution of escaping power is uniform and carries no information. In particular, any split into "towards beam" vs "away from beam" halves would yield exactly 50/50 by the reflection symmetry of the geometry, regardless of the physics.
 
 ---
 
@@ -129,26 +130,9 @@ Pd/Po = (dx · dy · Σ J_up) × T_avg
 
 ---
 
-## 5. Phi Decomposition
+## 5. Theta Angular Decomposition
 
-The phi angle of each ring voxel is computed from its (x, y) centre position:
-
-```
-phi = atan2(y, x)  [converted to degrees, range 0°–360°]
-```
-
-The ring is split into two halves:
-
-- **Towards beam**: phi ∈ [0°, 180°) — the +x half-plane
-- **Away from beam**: phi ∈ [180°, 360°) — the −x half-plane
-
-Each half contributes its own J_up integral, giving Pd_towards/Po and Pd_away/Po independently. This decomposition is spatially exact — it uses the actual (x, y) position of each voxel in the ring, with no approximation.
-
----
-
-## 6. Theta Angular Decomposition
-
-### 6.1 Snell's Law and the Full Hemisphere
+### 5.1 Snell's Law and the Full Hemisphere
 
 A key physical point is that the angular distribution must be expressed as angles **in air after refraction**, not as angles inside the tissue. Snell's law maps the escape cone inside skin to the full hemisphere in air:
 
@@ -162,7 +146,7 @@ n_skin · sin(θ_i) = n_air · sin(θ_t)
 
 The full escape cone inside skin (0° to 48.3°) therefore maps to the **full hemisphere in air** (0° to 90°). This means **all angular bins receive non-zero power** — including near-grazing angles — because Snell's law compresses the angular range inward from the skin side and expands it on the air side.
 
-### 6.2 Angular weight function in air
+### 5.2 Angular weight function in air
 
 The radiance inside a scattering medium is nearly isotropic (diffusion approximation). To obtain the angular distribution of escaping power expressed as angles in air, we must account for the Jacobian of the Snell's law transformation when changing the integration variable from θ_i (inside skin) to θ_t (in air).
 
@@ -194,7 +178,7 @@ w(θ_t) ∝ T_Fresnel(θ_t) · sin(θ_t) · cos(θ_t)
 
 where θ_t ∈ [0°, 90°]. T_Fresnel(θ_t) is close to its maximum near θ_t = 0° (normal incidence, low Fresnel reflection) and decreases toward zero as θ_t → 90°, because those photons originated near the critical angle inside skin where T_Fresnel → 0. The sin(θ_t) · cos(θ_t) factor peaks at 45°. The combined distribution therefore peaks somewhere in the mid-range and is non-zero across the full hemisphere.
 
-### 6.3 Two weight functions
+### 5.3 Two weight functions
 
 Two distinct weight functions are used in the script:
 
@@ -210,33 +194,35 @@ w_power(θ_t) ∝ T_Fresnel(θ_t) · sin(θ_t) · cos(θ_t)
 w_intensity(θ_t) ∝ T_Fresnel(θ_t) · cos(θ_t)
 ```
 
-This peaks at θ_t = 0° (normal direction) and falls to zero at θ_t = 90° (grazing), consistent with a Lambertian source and with the reference figure.
+This peaks at θ_t = 0° (normal direction) and falls to zero at θ_t = 90° (grazing), consistent with a Lambertian source.
 
-### 6.4 Solid angle per bin
+### 5.4 Solid angle per bin
 
-The solid angle of each annular bin is computed exactly as:
-
-```
-dΩ_full = 2π · [cos(θ_t_lo) − cos(θ_t_hi)]       (full 2π azimuthal strip)
-dΩ_half =  π · [cos(θ_t_lo) − cos(θ_t_hi)]       (one phi bracket, π wide)
-```
-
-where θ_t_lo and θ_t_hi are the lower and upper boundaries of the bin in terms of θ_t. The **exact** cosine-difference form is used rather than the differential approximation 2π·sin(θ_t)·Δθ_t, which would introduce error for finite bin widths. Since each phi bracket spans exactly half the azimuth (π radians instead of 2π), the towards and away halves each use dΩ_half, while the combined total uses dΩ_full.
-
-### 6.5 Binning
-
-The power weight w_power(θ_t) is integrated numerically over each of the 30 bins (3° wide) to give the fractional power w_bin(k). The total Pd/Po for each phi half is then distributed across bins:
+Each bin spans a full annular strip of the hemisphere (all azimuthal angles, 0 to 2π). The solid angle is computed exactly as:
 
 ```
-Pd_Po_table(k, towards) = Pd_towards/Po × w_bin(k)
-Pd_Po_table(k, away)    = Pd_away/Po    × w_bin(k)
+dΩ = 2π · [cos(θ_t_lo) − cos(θ_t_hi)]
 ```
 
-This assumes the same angular shape for both phi halves, which is justified because the Fresnel-modified emission pattern is azimuthally symmetric.
+where θ_t_lo and θ_t_hi are the lower and upper boundaries of the bin. The **exact** cosine-difference form is used rather than the differential approximation 2π·sin(θ_t)·Δθ_t, which would introduce error for finite bin widths.
+
+### 5.5 Binning
+
+The power weight w_power(θ_t) is integrated numerically over each of the 30 bins (3° wide each, covering 0° to 90°) to give the fractional power w_bin(k). The per-bin Pd/Po values are then:
+
+```
+Pd_Po_bin(k) = Pd/Po × w_bin(k)
+```
+
+The solid-angle-normalised radiant intensity per bin is:
+
+```
+Pd_Po_dOmega(k) = Pd/Po × w_intensity_bin(k) / dΩ(k)     [sr⁻¹]
+```
 
 ---
 
-## 7. Assumptions and Limitations
+## 6. Assumptions and Limitations
 
 **Diffusion approximation**: Valid when μ_s' >> μ_a and the point of interest is many scattering mean free paths from any source or boundary. At 2940 nm in skin these conditions are met at r = 0.2 cm, but would fail close to the beam axis or at much longer wavelengths where absorption dominates.
 
@@ -244,21 +230,18 @@ This assumes the same angular shape for both phi halves, which is justified beca
 
 **Single-pass Fresnel factor**: The script applies T_avg as a single Fresnel transmission correction. Multiple internal reflections (photons that are reflected at the surface, scatter back, and make another attempt) are not explicitly accounted for, but their contribution is already partially captured in the NFR distribution computed by the Monte Carlo simulation.
 
-**Same angular shape for both phi halves**: The angular weight w_bin(k) is derived from the average Fresnel transmittance and is the same for both phi halves. In reality the two halves may have slightly different angular distributions (e.g. if the near-beam half has a slightly more forward-peaked fluence field), but this is a second-order effect.
-
 **Epidermis optical properties used throughout**: The diffusion coefficient D is taken from the epidermis, which is the medium at the surface. The epidermis layer is only 0.01 cm (one voxel) thick, but since both iz1 and iz2 are inside the skin the gradient estimate reflects predominantly epidermal transport.
 
 ---
 
-## 8. Key Result Interpretation
+## 7. Key Result Interpretation
 
 The output table and plots show that:
 
 - All angular bins from θ = 0° to 90° receive non-zero power. This is a direct consequence of Snell's law: the narrow escape cone inside skin (0° to 48.3° from normal) is refractively expanded to cover the full hemisphere in air.
 - The Pd/Po per bin plot peaks in the mid-range (roughly θ = 30°–50°), reflecting the combined effect of the sin(θ_t)·cos(θ_t) solid-angle weighting and the Fresnel transmittance dropping toward zero at grazing angles.
-- The Pd/(Po·dΩ) plot (radiant intensity) peaks near θ = 0° (normal direction) and decreases monotonically toward grazing, consistent with the Lambertian cos(θ_t) dependence shown in the reference figure. The difference between the two plots is purely geometric: bins near grazing (θ ≈ 90°) have large solid angles, making their Pd/Po contribution relatively large even though their radiant intensity is small.
+- The Pd/(Po·dΩ) plot (radiant intensity) peaks near θ = 0° (normal direction) and decreases monotonically toward grazing, consistent with the Lambertian cos(θ_t) dependence. The difference between the two plots is purely geometric: bins near grazing (θ ≈ 90°) have large solid angles, making their Pd/Po contribution relatively large even though their radiant intensity is small.
 - Near-grazing bins (θ close to 90°) have non-zero but small radiant intensity, because photons exiting at those angles originated near the critical angle inside skin where the Fresnel transmittance approaches zero.
-- The slight asymmetry between "towards" and "away" phi halves reflects the asymmetry in the fluence rate distribution at the skin surface due to the directional nature of subsurface scattering relative to the ring position.
 
 ---
 
